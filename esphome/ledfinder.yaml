@@ -1,0 +1,70 @@
+# Finds the LED-ring data pin(s). Drives 4 candidate pins as WS2812 strips at once, each in its
+# own colour: p1 = red, p2 = green, p3 = blue, p4 = white (dim, so USB power is enough).
+# Whatever colour lights up tells you the pin. Try other groups on the command line:
+#
+#   esphome run esphome/ledfinder.yaml                                   # A: U7 header pins
+#   esphome -s p1 GPIO4  -s p2 GPIO13 -s p3 GPIO14 -s p4 GPIO27 run esphome/ledfinder.yaml
+#   esphome -s p1 GPIO25 -s p2 GPIO26 -s p3 GPIO32 -s p4 GPIO33 run esphome/ledfinder.yaml
+#   esphome -s p1 GPIO2  -s p2 GPIO17 -s p3 GPIO19 -s p4 GPIO21 run esphome/ledfinder.yaml
+#   esphome -s p1 GPIO12 -s p2 GPIO15 -s p3 GPIO4  -s p4 GPIO13 run esphome/ledfinder.yaml
+#
+# If the colours look wrong (e.g. red shows green), change channel_colors (GRB vs RGB) — note it.
+# If only part of the ring lights, the inner and outer rings are on separate pins (or chained).
+# Back up the stock flash first! (tools/backup_flash.ps1)
+
+substitutions:
+  p1: GPIO22
+  p2: GPIO23
+  p3: GPIO16
+  p4: GPIO5
+
+esphome:
+  name: ecowatch-ledfinder
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_on: { id: s1, red: 100%, green: 0%, blue: 0%, brightness: 15% }
+      - light.turn_on: { id: s2, red: 0%, green: 100%, blue: 0%, brightness: 15% }
+      - light.turn_on: { id: s3, red: 0%, green: 0%, blue: 100%, brightness: 15% }
+      - light.turn_on: { id: s4, red: 100%, green: 100%, blue: 100%, brightness: 15% }
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: s1
+    name: "Strip ${p1}"
+    pin: ${p1}
+    num_leds: 100
+    chipset: WS2812
+    channel_colors: GRB
+    rmt_symbols: 64   # ESP32 has 8x64 RMT symbols; the default 192 only fits two strips
+  - platform: esp32_rmt_led_strip
+    id: s2
+    name: "Strip ${p2}"
+    pin: ${p2}
+    num_leds: 100
+    chipset: WS2812
+    channel_colors: GRB
+    rmt_symbols: 64   # ESP32 has 8x64 RMT symbols; the default 192 only fits two strips
+  - platform: esp32_rmt_led_strip
+    id: s3
+    name: "Strip ${p3}"
+    pin: ${p3}
+    num_leds: 100
+    chipset: WS2812
+    channel_colors: GRB
+    rmt_symbols: 64   # ESP32 has 8x64 RMT symbols; the default 192 only fits two strips
+  - platform: esp32_rmt_led_strip
+    id: s4
+    name: "Strip ${p4}"
+    pin: ${p4}
+    num_leds: 100
+    chipset: WS2812
+    channel_colors: GRB
+    rmt_symbols: 64   # ESP32 has 8x64 RMT symbols; the default 192 only fits two strips

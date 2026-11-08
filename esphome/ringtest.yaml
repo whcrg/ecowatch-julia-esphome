@@ -1,0 +1,56 @@
+# Maps both LED chains (pins found by disassembling the stock firmware's Adafruit_NeoPixel setup):
+#   outer ring: GPIO17, 48 LEDs, GRB 800 kHz
+#   inner ring: GPIO15, 24 LEDs, GRB 800 kHz
+# Each chain is split in thirds: first third red, middle green, last blue. LED 0 of each chain is
+# white, so you can see where the chain starts and which way it runs.
+
+esphome:
+  name: ecowatch-ringtest
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_on: { id: outer, brightness: 40%, effect: "Chain map" }
+      - light.turn_on: { id: inner, brightness: 40%, effect: "Chain map" }
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: outer
+    name: "Outer ring"
+    pin: GPIO17
+    num_leds: 48
+    chipset: WS2812
+    channel_colors: GRB
+    gamma_correct: 1.0
+    default_transition_length: 0s
+    effects: &chain_map
+      - addressable_lambda:
+          name: "Chain map"
+          update_interval: 1s
+          lambda: |-
+            const int n = it.size();
+            for (int i = 0; i < n; i++) {
+              if (i == 0) it[i] = Color(255, 255, 255);
+              else if (i < n / 3) it[i] = Color(255, 0, 0);
+              else if (i < 2 * n / 3) it[i] = Color(0, 255, 0);
+              else it[i] = Color(0, 0, 255);
+            }
+
+  - platform: esp32_rmt_led_strip
+    id: inner
+    name: "Inner ring"
+    pin:
+      number: GPIO15
+      ignore_strapping_warning: true
+    num_leds: 24
+    chipset: WS2812
+    channel_colors: GRB
+    gamma_correct: 1.0
+    default_transition_length: 0s
+    effects: *chain_map

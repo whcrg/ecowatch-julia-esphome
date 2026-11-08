@@ -1,0 +1,79 @@
+# Finds the GPIO that switches on the LED-ring power supply.
+# Every 4 s the next candidate GPIO is driven HIGH (all others LOW). Meanwhile GPIO22 (LED data)
+# lights exactly N white LEDs, where N is the GPIO number being driven. When the ring lights up,
+# count the lit LEDs: that is the enable pin. The serial log prints each step too.
+# Candidates: 2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 23, 25, 26, 27, 32, 33
+
+esphome:
+  name: ecowatch-pinhunt
+  on_boot:
+    priority: -100
+    then:
+      - light.turn_on: { id: ring, brightness: 100%, effect: "Show pin" }
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+globals:
+  - id: step
+    type: int
+    initial_value: "-1"
+  - id: active_pin
+    type: int
+    initial_value: "0"
+
+output:
+  - { platform: gpio, id: o2, pin: { number: GPIO2, ignore_strapping_warning: true } }
+  - { platform: gpio, id: o4, pin: GPIO4 }
+  - { platform: gpio, id: o5, pin: { number: GPIO5, ignore_strapping_warning: true } }
+  - { platform: gpio, id: o12, pin: { number: GPIO12, ignore_strapping_warning: true } }
+  - { platform: gpio, id: o13, pin: GPIO13 }
+  - { platform: gpio, id: o14, pin: GPIO14 }
+  - { platform: gpio, id: o15, pin: { number: GPIO15, ignore_strapping_warning: true } }
+  - { platform: gpio, id: o16, pin: GPIO16 }
+  - { platform: gpio, id: o17, pin: GPIO17 }
+  - { platform: gpio, id: o18, pin: GPIO18 }
+  - { platform: gpio, id: o19, pin: GPIO19 }
+  - { platform: gpio, id: o21, pin: GPIO21 }
+  - { platform: gpio, id: o23, pin: GPIO23 }
+  - { platform: gpio, id: o25, pin: GPIO25 }
+  - { platform: gpio, id: o26, pin: GPIO26 }
+  - { platform: gpio, id: o27, pin: GPIO27 }
+  - { platform: gpio, id: o32, pin: GPIO32 }
+  - { platform: gpio, id: o33, pin: GPIO33 }
+
+interval:
+  - interval: 4s
+    then:
+      - lambda: |-
+          static esphome::output::BinaryOutput *outs[] = {id(o2), id(o4), id(o5), id(o12), id(o13), id(o14), id(o15), id(o16), id(o17), id(o18), id(o19), id(o21), id(o23), id(o25), id(o26), id(o27), id(o32), id(o33)};
+          static const int nums[] = {2, 4, 5, 12, 13, 14, 15, 16, 17, 18, 19, 21, 23, 25, 26, 27, 32, 33};
+          const int n = sizeof(nums) / sizeof(nums[0]);
+          for (int i = 0; i < n; i++) outs[i]->turn_off();
+          id(step) = (id(step) + 1) % n;
+          outs[id(step)]->turn_on();
+          id(active_pin) = nums[id(step)];
+          ESP_LOGI("pinhunt", "GPIO%d HIGH (showing %d LEDs)", id(active_pin), id(active_pin));
+
+light:
+  - platform: esp32_rmt_led_strip
+    id: ring
+    pin: GPIO22
+    num_leds: 72
+    chipset: WS2812
+    channel_colors: GRB
+    rmt_symbols: 256
+    gamma_correct: 1.0
+    default_transition_length: 0s
+    effects:
+      - addressable_lambda:
+          name: "Show pin"
+          update_interval: 200ms
+          lambda: |-
+            for (int i = 0; i < it.size(); i++)
+              it[i] = i < id(active_pin) ? Color(80, 80, 80) : Color::BLACK;
+

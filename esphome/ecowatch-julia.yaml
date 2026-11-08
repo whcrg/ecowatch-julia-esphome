@@ -1,0 +1,488 @@
+# ESPHome firmware for the EcoWatch Julia (Waltrix PCB 3.0.1, ESP32-WROOM-32).
+# Electricity-price clock: the analog hands run on the AA battery by themselves; the ESP32 only
+# drives the two RGB LED rings. Each ring has a mode select in Home Assistant:
+#   Outer ring: Price  | Manual
+#   Inner ring: Tariff | Power | Price | Manual
+# "Manual" = the ring is a plain HA light (colour, brightness, effects) you control yourself.
+# Prices come from Home Assistant through the `set_prices` action (see docs/home-assistant.md).
+# Display logic lives in ecowatch.h.
+
+substitutions:
+  name: ecowatch-julia
+  friendly_name: EcoWatch Julia
+  # HA sensor with current house power in W, used by the inner ring "Power" mode.
+  power_entity: sensor.power_consumption
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  includes:
+    - ecowatch.h
+  project:
+    name: waltrix.ecowatch-julia
+    version: "0.2.0"
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          ecowatch::lights_ready() = true;
+          ecowatch::apply_mode(id(ring_outer), id(outer_mode).current_option());
+          ecowatch::apply_mode(id(ring_inner), id(inner_mode).current_option());
+
+esp32:
+  board: esp32dev       # 4 MB flash (confirmed)
+  framework:
+    type: esp-idf
+
+logger:
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+  actions:
+    # Called by Home Assistant. start: unix time of the first price, resolution: minutes per price
+    # (15 or 60), prices: one value per slot in whatever unit you want the limits in (e.g. c/kWh).
+    - action: set_prices
+      variables:
+        start: int
+        resolution: int
+        prices: float[]
+      then:
+        - lambda: |-
+            ecowatch::prices().set(start, resolution, prices);
+            ESP_LOGI("ecowatch", "Got %u prices, %d min resolution", (unsigned) prices.size(), resolution);
+            id(current_price).update();
+            id(current_zone).update();
+            id(price_slots).update();
+
+    # Custom mode: paint individual LEDs. ring: "outer" (48 LEDs) or "inner" (24), offset: first LED
+    # (0 = first LED clockwise from 12), colors: 0xRRGGBB per LED. Switches that ring to Custom mode.
+    # Values are linear (no gamma): 0x800000 is half the current of 0xFF0000.
+    - action: set_pixels
+      variables:
+        ring: string
+        offset: int
+        colors: int[]
+      then:
+        - lambda: |-
+            if (!ecowatch::set_custom_pixels(ring, offset, colors)) {
+              ESP_LOGW("ecowatch", "set_pixels: unknown ring '%s' (use outer/inner)", ring.c_str());
+              return;
+            }
+            auto *sel = ecowatch::ring_index(ring) == 0 ? id(outer_mode) : id(inner_mode);
+            if (std::string(sel->current_option()) != "Custom") sel->make_call().set_option("Custom").perform();
+
+    # Same, plus brightness in percent (0-100) per LED.
+    - action: set_pixels_brightness
+      variables:
+        ring: string
+        offset: int
+        colors: int[]
+        brightness: int[]
+      then:
+        - lambda: |-
+            if (!ecowatch::set_custom_pixels(ring, offset, colors, brightness)) {
+              ESP_LOGW("ecowatch", "set_pixels_brightness: unknown ring '%s' (use outer/inner)", ring.c_str());
+              return;
+            }
+            auto *sel = ecowatch::ring_index(ring) == 0 ? id(outer_mode) : id(inner_mode);
+            if (std::string(sel->current_option()) != "Custom") sel->make_call().set_option("Custom").perform();
+
+    # Blank a ring's Custom buffer (the ring stays in Custom mode).
+    - action: clear_pixels
+      variables:
+        ring: string
+      then:
+        - lambda: |-
+            int r = ecowatch::ring_index(ring);
+            if (r < 0) return;
+            auto &px = ecowatch::custom_pixels(r);
+            std::fill(px.begin(), px.end(), Color::BLACK);
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${friendly_name} Fallback"
+    password: !secret wifi_hotspot_password
+
+captive_portal:
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# --- Ring modes ----------------------------------------------------------------
+select:
+  - platform: template
+    id: outer_mode
+    name: "Outer ring mode"
+    icon: mdi:circle-outline
+    options: ["Price", "Custom", "Manual"]
+    initial_option: "Price"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: ecowatch::apply_mode(id(ring_outer), x);
+
+  - platform: template
+    id: inner_mode
+    name: "Inner ring mode"
+    icon: mdi:circle-small
+    options: ["Tariff", "Power", "Price", "Custom", "Manual"]
+    initial_option: "Tariff"
+    optimistic: true
+    restore_value: true
+    on_value:
+      - lambda: ecowatch::apply_mode(id(ring_inner), x);
+
+  # Same colour modes as the stock firmware.
+  - platform: template
+    id: color_mode
+    name: "Price colour mode"
+    icon: mdi:palette
+    entity_category: config
+    options: ["Daily average", "Own limits", "Green hours"]
+    initial_option: "Daily average"
+    optimistic: true
+    restore_value: true
+
+  # Flash the LEDs of the current hour, or just the current slot (15 min outer, 30 min inner),
+  # in Price mode.
+  - platform: template
+    id: flash_current
+    name: "Flash current time"
+    icon: mdi:clock-alert-outline
+    entity_category: config
+    options: ["Off", "Current hour", "Current quarter"]
+    initial_option: "Off"
+    optimistic: true
+    restore_value: true
+
+# --- Price settings ------------------------------------------------------------
+number:
+  - platform: template
+    id: flash_period
+    name: "Flash period"
+    icon: mdi:timer-outline
+    entity_category: config
+    unit_of_measurement: ms
+    min_value: 100
+    max_value: 3000
+    step: 50
+    initial_value: 500
+    optimistic: true
+    restore_value: true
+    mode: box
+
+  # Total LED current budget for both rings. The stock charger is 5 V / 2 A; with a ~1 A USB supply
+  # keep it around 600 mA so the ESP32's Wi-Fi peaks still fit.
+  - platform: template
+    id: current_limit
+    name: "LED current limit"
+    icon: mdi:current-dc
+    entity_category: config
+    unit_of_measurement: mA
+    min_value: 100
+    max_value: 3000
+    step: 50
+    initial_value: 600
+    optimistic: true
+    restore_value: true
+    mode: box
+
+  - platform: template
+    id: low_limit
+    name: "Low price limit"
+    icon: mdi:arrow-collapse-down
+    entity_category: config
+    min_value: -100
+    max_value: 1000
+    step: 0.1
+    initial_value: 5
+    optimistic: true
+    restore_value: true
+    mode: box
+
+  - platform: template
+    id: high_limit
+    name: "High price limit"
+    icon: mdi:arrow-collapse-up
+    entity_category: config
+    min_value: -100
+    max_value: 1000
+    step: 0.1
+    initial_value: 15
+    optimistic: true
+    restore_value: true
+    mode: box
+
+  - platform: template
+    id: green_hours
+    name: "Green hours"
+    icon: mdi:leaf
+    entity_category: config
+    min_value: 1
+    max_value: 24
+    step: 1
+    initial_value: 6
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    id: avg_offset
+    name: "Average offset"
+    icon: mdi:plus-minus-variant
+    entity_category: config
+    min_value: -100
+    max_value: 100
+    step: 0.1
+    initial_value: 0
+    optimistic: true
+    restore_value: true
+    mode: box
+
+  # --- Inner ring: tariff and power ---
+  - platform: template
+    id: tariff_start
+    name: "Tariff start hour"
+    icon: mdi:clock-start
+    entity_category: config
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 7
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    id: tariff_stop
+    name: "Tariff stop hour"
+    icon: mdi:clock-end
+    entity_category: config
+    min_value: 0
+    max_value: 23
+    step: 1
+    initial_value: 22
+    optimistic: true
+    restore_value: true
+
+  - platform: template
+    id: max_power
+    name: "Power ring full scale"
+    icon: mdi:flash
+    entity_category: config
+    unit_of_measurement: W
+    min_value: 500
+    max_value: 30000
+    step: 100
+    initial_value: 10000
+    optimistic: true
+    restore_value: true
+    mode: box
+
+switch:
+  - platform: template
+    id: below_zero_low
+    name: "Negative price always green"
+    icon: mdi:minus-circle-outline
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    id: hide_missing
+    name: "Hide hours without price"
+    icon: mdi:eye-off
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    id: tariff_weekdays_only
+    name: "Tariff weekdays only"
+    icon: mdi:calendar-week
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+
+# --- Expansion header U7 -------------------------------------------------------
+# 3.3V, GND, GPIO5, GPIO16, GPIO23, GPIO18, GPIO22 (see docs/hardware.md). No ADC/DAC on these pins.
+# I2C on two adjacent pins; the boot scan prints the address of anything plugged in.
+# Only enable it with a sensor connected: with nothing on the bus (no pull-ups) the I2C driver
+# keeps doing bus recovery and the ESP32 boot-loops into safe mode (seen 2026-11-08).
+# GPIO16 / GPIO22 stay free for a UART device (e.g. LD2410 presence radar, needs 5 V from elsewhere).
+# i2c:
+#   id: header_i2c
+#   sda: GPIO23
+#   scl: GPIO18
+#   frequency: 100kHz
+#   scan: true
+
+# Examples, uncomment what you plug in:
+# sensor:
+#   - platform: sht4x            # temperature + humidity, address 0x44
+#     temperature: { name: "Temperature" }
+#     humidity: { name: "Humidity" }
+#   - platform: bh1750           # ambient light, address 0x23 - e.g. for night dimming
+#     name: "Ambient light"
+# uart:
+#   rx_pin: GPIO16
+#   tx_pin: GPIO22
+#   baud_rate: 256000            # LD2410
+# ld2410:
+
+# --- Buttons -----------------------------------------------------------------
+binary_sensor:
+  - platform: gpio
+    name: "Boot button"
+    pin:
+      number: GPIO0
+      inverted: true
+      mode: INPUT_PULLUP
+      ignore_strapping_warning: true
+
+# --- LED rings ---------------------------------------------------------------
+# From disassembly of stock fw 3.6.4 (Adafruit_NeoPixel, NEO_GRB + NEO_KHZ800):
+#   outer ring: GPIO17, 48 LEDs (4 per hour)    inner ring: GPIO15, 24 LEDs (2 per hour)
+# Both: index 0 = first LED clockwise from 12 o'clock, running clockwise (verified with ringtest.yaml).
+light:
+  - platform: esp32_rmt_led_strip
+    id: ring_outer
+    name: "Outer ring"
+    pin: GPIO17
+    num_leds: 48
+    chipset: WS2812
+    channel_colors: GRB
+    default_transition_length: 0s
+    restore_mode: RESTORE_DEFAULT_ON
+    effects:
+      - addressable_lambda:
+          name: "Price"
+          update_interval: 150ms
+          lambda: |-
+            ecowatch::PriceSettings s{(int) id(color_mode).active_index().value_or(0), id(low_limit).state,
+                                      id(high_limit).state, (int) id(green_hours).state, id(avg_offset).state,
+                                      id(below_zero_low).state};
+            ecowatch::render_price(it, id(ha_time).now(), s, (int) id(flash_current).active_index().value_or(0),
+                                   (uint32_t) id(flash_period).state, id(hide_missing).state);
+      - addressable_lambda:
+          name: "Custom"
+          update_interval: 100ms
+          lambda: ecowatch::render_custom(it, 0);
+      - addressable_rainbow:
+      - addressable_color_wipe:
+      - addressable_twinkle:
+
+  - platform: esp32_rmt_led_strip
+    id: ring_inner
+    name: "Inner ring"
+    pin:
+      number: GPIO15
+      ignore_strapping_warning: true
+    num_leds: 24
+    chipset: WS2812
+    channel_colors: GRB
+    default_transition_length: 0s
+    restore_mode: RESTORE_DEFAULT_ON
+    effects:
+      - addressable_lambda:
+          name: "Tariff"
+          update_interval: 150ms
+          lambda: |-
+            ecowatch::render_tariff(it, id(ha_time).now(), (int) id(tariff_start).state,
+                                    (int) id(tariff_stop).state, id(tariff_weekdays_only).state);
+      - addressable_lambda:
+          name: "Power"
+          update_interval: 150ms
+          lambda: |-
+            ecowatch::render_power(it, id(house_power).state, id(max_power).state);
+      - addressable_lambda:
+          name: "Price"
+          update_interval: 150ms
+          lambda: |-
+            ecowatch::PriceSettings s{(int) id(color_mode).active_index().value_or(0), id(low_limit).state,
+                                      id(high_limit).state, (int) id(green_hours).state, id(avg_offset).state,
+                                      id(below_zero_low).state};
+            ecowatch::render_price(it, id(ha_time).now(), s, (int) id(flash_current).active_index().value_or(0),
+                                   (uint32_t) id(flash_period).state, id(hide_missing).state);
+      - addressable_lambda:
+          name: "Custom"
+          update_interval: 100ms
+          lambda: ecowatch::render_custom(it, 1);
+      - addressable_rainbow:
+      - addressable_color_wipe:
+      - addressable_twinkle:
+
+# --- LED current limiter -------------------------------------------------------
+interval:
+  - interval: 200ms
+    then:
+      - lambda: |-
+          if (!ecowatch::lights_ready()) return;
+          ecowatch::limit_power(id(ring_outer), id(ring_inner), id(current_limit).state);
+
+# --- Sensors -------------------------------------------------------------------
+sensor:
+  - platform: template
+    id: led_current
+    name: "LED current (estimated)"
+    icon: mdi:current-dc
+    unit_of_measurement: mA
+    accuracy_decimals: 0
+    entity_category: diagnostic
+    update_interval: 10s
+    lambda: |-
+      if (!ecowatch::lights_ready()) return NAN;
+      return ecowatch::estimated_current_ma(id(ring_outer), id(ring_inner));
+
+  - platform: homeassistant
+    id: house_power
+    entity_id: ${power_entity}
+    internal: true
+
+  - platform: template
+    id: current_price
+    name: "Current price"
+    icon: mdi:cash
+    accuracy_decimals: 2
+    update_interval: 60s
+    lambda: |-
+      auto now = id(ha_time).now();
+      if (!now.is_valid()) return NAN;
+      return ecowatch::prices().at(now.timestamp);
+
+  # 1 = green, 2 = yellow, 3 = red, 0 = no price (same numbering as the stock firmware's MQTT zone).
+  - platform: template
+    id: current_zone
+    name: "Current price zone"
+    icon: mdi:traffic-light
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      auto now = id(ha_time).now();
+      if (!now.is_valid()) return NAN;
+      ecowatch::PriceSettings s{(int) id(color_mode).active_index().value_or(0), id(low_limit).state,
+                                id(high_limit).state, (int) id(green_hours).state, id(avg_offset).state,
+                                id(below_zero_low).state};
+      return ecowatch::zone_for(now.timestamp, s);
+
+  # How many price slots are stored; 0 means HA has not sent prices since the last reboot.
+  - platform: template
+    id: price_slots
+    name: "Price slots stored"
+    icon: mdi:database-clock
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 300s
+    lambda: |-
+      return (float) ecowatch::prices().size();
+
+  - platform: wifi_signal
+    name: "WiFi signal"
+    entity_category: diagnostic
+    update_interval: 60s

@@ -1,0 +1,10 @@
+# Flash dumps contain vendor code and Wi-Fi credentials
+dumps/
+*.bin
+
+# ESPHome
+esphome/secrets.yaml
+esphome/.esphome/
+.esphome/
+
+__pycache__/
