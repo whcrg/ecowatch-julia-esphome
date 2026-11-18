@@ -1,9 +1,11 @@
 # ESPHome firmware for the EcoWatch Julia (Waltrix PCB 3.0.1, ESP32-WROOM-32).
 # Electricity-price clock: the analog hands run on the AA battery by themselves; the ESP32 only
 # drives the two RGB LED rings. Each ring has a mode select in Home Assistant:
-#   Outer ring: Price  | Manual
-#   Inner ring: Tariff | Power | Price | Manual
-# "Manual" = the ring is a plain HA light (colour, brightness, effects) you control yourself.
+#   Outer ring: Price  | Custom | Manual
+#   Inner ring: Tariff | Power | Price | Custom | Manual
+# "Custom" = per-LED colours sent from HA (set_pixels). "Manual" = the ring is a plain HA light
+# (colour, brightness, effects) you control yourself. The blink action overlays an alert on any
+# mode except Manual.
 # Prices come from Home Assistant through the `set_prices` action (see docs/home-assistant.md).
 # Display logic lives in ecowatch.h.
 
@@ -20,7 +22,7 @@ esphome:
     - ecowatch.h
   project:
     name: waltrix.ecowatch-julia
-    version: "0.2.0"
+    version: "0.3.0"
   on_boot:
     priority: -100
     then:
@@ -98,6 +100,32 @@ api:
             if (r < 0) return;
             auto &px = ecowatch::custom_pixels(r);
             std::fill(px.begin(), px.end(), Color::BLACK);
+
+    # Blink alert on top of the ring's current display (any mode except Manual). One per ring; a new
+    # call replaces it. leds: indices, [] = whole ring. color: 0xRRGGBB. period: ms per on+off cycle
+    # (>= 100). duty: % of the cycle the colour is on. alternate: "off" (colour / dark) or
+    # "underlying" (colour / normal display). duration: seconds, 0 = until blink_stop.
+    - action: blink
+      variables:
+        ring: string
+        leds: int[]
+        color: int
+        period: int
+        duty: int
+        alternate: string
+        duration: int
+      then:
+        - lambda: |-
+            if (!ecowatch::set_blink(ring, leds, color, period, duty, alternate, duration))
+              ESP_LOGW("ecowatch", "blink: unknown ring '%s' (use outer/inner)", ring.c_str());
+
+    - action: blink_stop
+      variables:
+        ring: string
+      then:
+        - lambda: |-
+            int r = ecowatch::ring_index(ring);
+            if (r >= 0) ecowatch::stop_blink(r);
 
 ota:
   - platform: esphome
@@ -363,17 +391,20 @@ light:
     effects:
       - addressable_lambda:
           name: "Price"
-          update_interval: 150ms
+          update_interval: 50ms
           lambda: |-
             ecowatch::PriceSettings s{(int) id(color_mode).active_index().value_or(0), id(low_limit).state,
                                       id(high_limit).state, (int) id(green_hours).state, id(avg_offset).state,
                                       id(below_zero_low).state};
             ecowatch::render_price(it, id(ha_time).now(), s, (int) id(flash_current).active_index().value_or(0),
                                    (uint32_t) id(flash_period).state, id(hide_missing).state);
+            ecowatch::apply_blink(it, 0);
       - addressable_lambda:
           name: "Custom"
-          update_interval: 100ms
-          lambda: ecowatch::render_custom(it, 0);
+          update_interval: 50ms
+          lambda: |-
+            ecowatch::render_custom(it, 0);
+            ecowatch::apply_blink(it, 0);
       - addressable_rainbow:
       - addressable_color_wipe:
       - addressable_twinkle:
@@ -392,28 +423,33 @@ light:
     effects:
       - addressable_lambda:
           name: "Tariff"
-          update_interval: 150ms
+          update_interval: 50ms
           lambda: |-
             ecowatch::render_tariff(it, id(ha_time).now(), (int) id(tariff_start).state,
                                     (int) id(tariff_stop).state, id(tariff_weekdays_only).state);
+            ecowatch::apply_blink(it, 1);
       - addressable_lambda:
           name: "Power"
-          update_interval: 150ms
+          update_interval: 50ms
           lambda: |-
             ecowatch::render_power(it, id(house_power).state, id(max_power).state);
+            ecowatch::apply_blink(it, 1);
       - addressable_lambda:
           name: "Price"
-          update_interval: 150ms
+          update_interval: 50ms
           lambda: |-
             ecowatch::PriceSettings s{(int) id(color_mode).active_index().value_or(0), id(low_limit).state,
                                       id(high_limit).state, (int) id(green_hours).state, id(avg_offset).state,
                                       id(below_zero_low).state};
             ecowatch::render_price(it, id(ha_time).now(), s, (int) id(flash_current).active_index().value_or(0),
                                    (uint32_t) id(flash_period).state, id(hide_missing).state);
+            ecowatch::apply_blink(it, 1);
       - addressable_lambda:
           name: "Custom"
-          update_interval: 100ms
-          lambda: ecowatch::render_custom(it, 1);
+          update_interval: 50ms
+          lambda: |-
+            ecowatch::render_custom(it, 1);
+            ecowatch::apply_blink(it, 1);
       - addressable_rainbow:
       - addressable_color_wipe:
       - addressable_twinkle:

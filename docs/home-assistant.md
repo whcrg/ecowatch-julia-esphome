@@ -482,6 +482,40 @@ action: esphome.ecowatch_julia_set_pixels
 data: {ring: outer, offset: 12, colors: [255, 255, 255, 255]}
 ```
 
+## Blink alerts
+
+`esphome.ecowatch_julia_blink` blinks chosen LEDs on top of whatever the ring is showing (Price,
+Tariff, Power or Custom; not the built-in effects of `Manual`). The clock does the timing itself, so
+HA sends one call. One alert per ring: a new call replaces the old one. Alerts live in RAM, so a
+reboot clears them. All fields are required.
+
+| Field | Meaning |
+|-------|---------|
+| `ring` | `outer` (LEDs 0–47) or `inner` (0–23) |
+| `leds` | LED indices, `[]` = whole ring |
+| `color` | `0xRRGGBB` as an integer (`16711680` = red, `16777215` = white). Same colour handling as the price colours |
+| `period` | ms per on+off cycle (min 100; rings redraw every 50 ms) |
+| `duty` | % of the cycle the alert colour is shown |
+| `alternate` | `off`: colour ↔ dark. `underlying`: colour ↔ the normal display |
+| `duration` | seconds until it stops by itself, `0` = until `blink_stop` |
+
+`esphome.ecowatch_julia_blink_stop` with `ring` cancels it.
+
+```yaml
+# Door left open: whole inner ring red, short flashes, until stopped
+action: esphome.ecowatch_julia_blink
+data: {ring: inner, leds: [], color: 16711680, period: 1000, duty: 30, alternate: "off", duration: 0}
+---
+# Highlight 3 o'clock (outer LEDs 12-15) white over the price colours for 5 minutes
+action: esphome.ecowatch_julia_blink
+data: {ring: outer, leds: [12, 13, 14, 15], color: 16777215, period: 500, duty: 50, alternate: underlying, duration: 300}
+---
+action: esphome.ecowatch_julia_blink_stop
+data: {ring: inner}
+```
+
+Anything other than `underlying` means `off` (an unquoted YAML `off` becomes `False`, which also works).
+
 ## LED current limiter
 
 Both rings together are estimated at about 20 mA per colour channel at full duty (72 LEDs × 60 mA

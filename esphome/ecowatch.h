@@ -285,6 +285,66 @@ inline void render_custom(AddressableLight &it, int ring) {
   }
 }
 
+// --- Blink alert overlay ------------------------------------------------------------------------
+// Drawn on top of whatever a ring's display effect rendered (Price, Tariff, Power, Custom; not the
+// Manual built-in effects). One alert per ring; a new one replaces the old.
+
+struct Blink {
+  bool active = false;
+  std::vector<bool> mask;          // which LEDs blink
+  Color color = Color(255, 0, 0);  // same colour space as the price colours (light gamma applies)
+  uint32_t period_ms = 500;        // one on+off cycle
+  int duty = 50;                   // % of the cycle showing `color`
+  bool show_underlying = false;    // off phase: false = dark, true = the normal display
+  uint32_t start_ms = 0;
+  uint32_t duration_ms = 0;        // 0 = until stopped
+};
+
+inline Blink &blink(int ring) {
+  static Blink rings[2];
+  return rings[ring];
+}
+
+// leds: LED indices (0 = first clockwise from 12); empty = whole ring. color: 0xRRGGBB.
+// alternate: "off" (colour / dark) or "underlying" (colour / normal display). duration_s: 0 = forever.
+inline bool set_blink(const std::string &ring, const std::vector<int32_t> &leds, int32_t color, int period_ms,
+                      int duty, const std::string &alternate, int duration_s) {
+  int r = ring_index(ring);
+  if (r < 0) return false;
+  size_t n = r == 0 ? 48 : 24;
+  Blink b;
+  b.mask.assign(n, leds.empty());
+  for (int32_t i : leds)
+    if (i >= 0 && i < (int32_t) n) b.mask[i] = true;
+  uint32_t c = (uint32_t) color;
+  b.color = Color((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF);
+  b.period_ms = (uint32_t) std::max(100, period_ms);
+  b.duty = std::max(0, std::min(100, duty));
+  b.show_underlying = alternate == "underlying" || alternate == "normal";
+  b.start_ms = esphome::millis();
+  b.duration_ms = (uint32_t) std::max(0, duration_s) * 1000u;
+  b.active = true;
+  blink(r) = b;
+  return true;
+}
+
+inline void stop_blink(int ring) { blink(ring).active = false; }
+
+// Call at the end of every display effect lambda.
+inline void apply_blink(AddressableLight &it, int ring) {
+  Blink &b = blink(ring);
+  if (!b.active) return;
+  uint32_t elapsed = esphome::millis() - b.start_ms;
+  if (b.duration_ms > 0 && elapsed >= b.duration_ms) {
+    b.active = false;
+    return;
+  }
+  bool on = (elapsed % b.period_ms) * 100 < b.period_ms * (uint32_t) b.duty;
+  if (!on && b.show_underlying) return;
+  for (int i = 0; i < it.size() && i < (int) b.mask.size(); i++)
+    if (b.mask[i]) it[i] = on ? b.color : Color::BLACK;
+}
+
 // --- LED current limiter ------------------------------------------------------------------------
 
 // WS2812B: roughly 20 mA per colour channel at full duty.
