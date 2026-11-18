@@ -325,10 +325,16 @@ inline bool set_blink(const std::string &ring, const std::vector<int32_t> &leds,
   b.duration_ms = (uint32_t) std::max(0, duration_s) * 1000u;
   b.active = true;
   blink(r) = b;
+  ESP_LOGI("ecowatch", "Blink start: %s ring, %u LEDs, #%06X, %u ms, %d %%, alternate %s, %d s", ring.c_str(),
+           (unsigned) std::count(b.mask.begin(), b.mask.end(), true), (unsigned) (c & 0xFFFFFF),
+           (unsigned) b.period_ms, b.duty, b.show_underlying ? "underlying" : "off", duration_s);
   return true;
 }
 
-inline void stop_blink(int ring) { blink(ring).active = false; }
+inline void stop_blink(int ring) {
+  if (blink(ring).active) ESP_LOGI("ecowatch", "Blink stop: ring %d", ring);
+  blink(ring).active = false;
+}
 
 // Call at the end of every display effect lambda.
 inline void apply_blink(AddressableLight &it, int ring) {
@@ -337,6 +343,7 @@ inline void apply_blink(AddressableLight &it, int ring) {
   uint32_t elapsed = esphome::millis() - b.start_ms;
   if (b.duration_ms > 0 && elapsed >= b.duration_ms) {
     b.active = false;
+    ESP_LOGI("ecowatch", "Blink ended: ring %d after %u ms", ring, (unsigned) elapsed);
     return;
   }
   bool on = (elapsed % b.period_ms) * 100 < b.period_ms * (uint32_t) b.duty;
