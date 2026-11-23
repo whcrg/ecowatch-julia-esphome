@@ -49,7 +49,7 @@ api:
       then:
         - lambda: |-
             ecowatch::prices().set(start, resolution, prices);
-            ESP_LOGI("ecowatch", "Got %u prices, %d min resolution", (unsigned) prices.size(), resolution);
+            ESP_LOGI("ecowatch", "Got %u prices, %d min resolution", (unsigned) prices.size(), (int) resolution);
             id(current_price).update();
             id(current_zone).update();
             id(price_slots).update();
