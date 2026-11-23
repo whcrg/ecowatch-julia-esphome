@@ -26,7 +26,8 @@ You need Home Assistant, a computer with Chrome or Edge, and a micro-USB **data*
 ### 1. Create the device in ESPHome
 
 1. In Home Assistant, install the **ESPHome Device Builder** app (Settings → Apps) and open it.
-2. **+ New device** → name it `ecowatch-julia` → **ESP32** → skip the install for now.
+2. Create a new device (**+ New device**, or **New project** in newer versions) → name it
+   `ecowatch-julia` → **ESP32** / **Generic ESP32** → skip the install for now.
 3. Click **Edit** on the new device. Keep everything the wizard wrote (your generated API key and
    passwords) and paste this at the end:
 
@@ -43,7 +44,10 @@ You need Home Assistant, a computer with Chrome or Edge, and a micro-USB **data*
        refresh: 1d
    ```
 
-4. Check that the `esp32:` block says `board: esp32dev` and `type: esp-idf`. **Save**.
+4. Leave the wizard's `esp32:` block as it is (`board: esp32dev` or `variant: esp32`, both work),
+   as long as the framework is `type: esp-idf`. Newer wizards don't add an OTA password; adding one
+   under `ota:` (`password: "something-long"`) stops others on your network from flashing the clock.
+   **Save**.
 
 The firmware code and settings are fetched from this repository when you build, so nothing else
 has to be copied to Home Assistant. A complete example is in

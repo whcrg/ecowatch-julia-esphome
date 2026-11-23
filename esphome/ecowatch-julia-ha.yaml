@@ -11,7 +11,7 @@ esphome:
   friendly_name: ${friendly_name}
 
 esp32:
-  board: esp32dev
+  board: esp32dev       # newer wizards write `variant: esp32` instead; both work
   framework:
     type: esp-idf
 
@@ -24,7 +24,7 @@ api:
 
 ota:
   - platform: esphome
-    password: "YOUR-GENERATED-PASSWORD"
+    password: "YOUR-GENERATED-PASSWORD"   # newer wizards leave this out; add one
 
 wifi:
   ssid: !secret wifi_ssid
