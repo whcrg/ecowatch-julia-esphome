@@ -1,0 +1,54 @@
+# EcoWatch Julia for Home Assistant's ESPHome Device Builder.
+# Everything above "external_components" is what the Builder's "New device" wizard writes for you
+# (keep YOUR generated key and passwords). Add the two blocks at the end and install.
+# The firmware code and settings are fetched from GitHub when you install, so this is all you need.
+substitutions:
+  name: ecowatch-julia
+  friendly_name: EcoWatch Julia
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "YOUR-GENERATED-KEY"
+
+ota:
+  - platform: esphome
+    password: "YOUR-GENERATED-PASSWORD"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Ecowatch-Julia Fallback Hotspot"
+    password: "YOUR-GENERATED-PASSWORD"
+
+captive_portal:
+
+# --- Add these two blocks ---------------------------------------------------------------------
+external_components:
+  - source: github://whcrg/ecowatch-julia-esphome@main
+    components: [ecowatch]
+
+packages:
+  ecowatch:
+    url: https://github.com/whcrg/ecowatch-julia-esphome
+    ref: main
+    files: [esphome/ecowatch-julia-base.yaml]
+    refresh: 1d
+
+# Optional: your house power sensor (W) for the inner ring "Power" mode.
+# substitutions:            (add this line to the substitutions block at the top instead)
+#   power_entity: sensor.my_power
