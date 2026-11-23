@@ -26,8 +26,8 @@ You need Home Assistant, a computer with Chrome or Edge, and a micro-USB **data*
 ### 1. Create the device in ESPHome
 
 1. In Home Assistant, install the **ESPHome Device Builder** app (Settings → Apps) and open it.
-2. Create a new device (**+ New device**, or **New project** in newer versions) → name it
-   `ecowatch-julia` → **ESP32** / **Generic ESP32** → skip the install for now.
+2. **+ Create device** (**+ New device** in older versions) → name it `ecowatch-julia` →
+   **Generic ESP32** (**ESP32** in older versions) → skip the install for now.
 3. Click **Edit** on the new device. Keep everything the wizard wrote (your generated API key and
    passwords) and paste this at the end:
 
